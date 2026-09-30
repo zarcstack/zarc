@@ -15,13 +15,20 @@ pub fn build(b: *std.Build) void {
     core.addIncludePath(b.path("include"));
     b.installArtifact(core);
 
-    // cli: zarc
+    // expose core as a named module so cli can @import("zarcutil")
+    const core_module = b.addModule("zarcutil", .{
+        .root_source_file = b.path("core/src/lib.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
     const cli = b.addExecutable(.{
         .name = "zarc",
         .root_source_file = b.path("cli/src/main.zig"),
         .target = target,
         .optimize = optimize,
     });
+    cli.root_module.addImport("zarcutil", core_module);
     cli.linkLibrary(core);
     cli.linkLibC();
     cli.addIncludePath(b.path("include"));
