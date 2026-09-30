@@ -1,3 +1,63 @@
+# Zig
 .zig-cache/
+zig-cache/
 zig-out/
+build/
 *.o
+*.a
+*.so
+*.dylib
+*.dll
+
+# Rust
+target/
+Cargo.lock
+**/*.rs.bk
+
+# OCaml
+_build/
+*.cmi
+*.cmo
+*.cmx
+
+# CMake / C++
+build/
+cmake-build-*/
+CMakeCache.txt
+CMakeFiles/
+*.ninja
+
+# Generated code
+codecs/*/generated/
+containers/*/generated/
+codecs/generated/
+containers/generated/
+
+# Nix
+result
+result-*
+
+# Editors
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+*.sublime-project
+*.sublime-workspace
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Logs
+*.log
+
+# Local env
+.env
+.env.local
+.direnv/
+
+# Termux / Android
+/data/
