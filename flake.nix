@@ -13,7 +13,7 @@
       in {
         devShells.default = pkgs.mkShell {
           packages = with pkgs; [
-            zig_0_14
+            zig_0_16
             zls
             clang_18
             cmake
