@@ -1,5 +1,7 @@
 //! libzarcutil -- the runtime every other zarc library depends on.
 
+pub const version = "0.1";
+
 pub const memory = @import("memory.zig");
 
 test {
