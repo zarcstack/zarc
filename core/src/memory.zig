@@ -2,12 +2,11 @@
 //! ZarcAllocator. No global malloc, no hidden allocators.
 
 const std = @import("std");
-const c = std.c;
 
 pub const Allocator = extern struct {
-    alloc_fn: *const fn (ctx: ?*anyopaque, size: usize, alignment: usize) callconv(.C) ?*anyopaque,
-    realloc_fn: *const fn (ctx: ?*anyopaque, ptr: ?*anyopaque, old_size: usize, new_size: usize, alignment: usize) callconv(.C) ?*anyopaque,
-    free_fn: *const fn (ctx: ?*anyopaque, ptr: ?*anyopaque, size: usize, alignment: usize) callconv(.C) void,
+    alloc_fn: *const fn (ctx: ?*anyopaque, size: usize, alignment: usize) callconv(.c) ?*anyopaque,
+    realloc_fn: *const fn (ctx: ?*anyopaque, ptr: ?*anyopaque, old_size: usize, new_size: usize, alignment: usize) callconv(.c) ?*anyopaque,
+    free_fn: *const fn (ctx: ?*anyopaque, ptr: ?*anyopaque, size: usize, alignment: usize) callconv(.c) void,
     ctx: ?*anyopaque,
 
     pub fn alloc(self: *const Allocator, size: usize, alignment: usize) ?[*]u8 {
@@ -100,7 +99,7 @@ pub fn fromStd(zig_alloc: *const std.mem.Allocator) Allocator {
     };
 }
 
-fn stdAllocShim(ctx: ?*anyopaque, size: usize, alignment: usize) callconv(.C) ?*anyopaque {
+fn stdAllocShim(ctx: ?*anyopaque, size: usize, alignment: usize) callconv(.c) ?*anyopaque {
     const zig_alloc: *const std.mem.Allocator = @ptrCast(@alignCast(ctx orelse return null));
     const a = std.mem.Alignment.fromByteUnits(alignment);
     const buf = zig_alloc.rawAlloc(size, a, @returnAddress()) orelse return null;
@@ -113,16 +112,9 @@ fn stdReallocShim(
     old_size: usize,
     new_size: usize,
     alignment: usize,
-) callconv(.C) ?*anyopaque {
+) callconv(.c) ?*anyopaque {
     const zig_alloc: *const std.mem.Allocator = @ptrCast(@alignCast(ctx orelse return null));
     const a = std.mem.Alignment.fromByteUnits(alignment);
-
-    if (ptr) |p| {
-        const old_slice = @as([*]u8, @ptrCast(p))[0..old_size];
-        if (zig_alloc.resize(old_slice, a, new_size, @returnAddress())) {
-            return p;
-        }
-    }
 
     const new_buf = zig_alloc.rawAlloc(new_size, a, @returnAddress()) orelse return null;
     if (ptr) |p| {
@@ -139,7 +131,7 @@ fn stdFreeShim(
     ptr: ?*anyopaque,
     size: usize,
     alignment: usize,
-) callconv(.C) void {
+) callconv(.c) void {
     const p = ptr orelse return;
     const zig_alloc: *const std.mem.Allocator = @ptrCast(@alignCast(ctx orelse return));
     const a = std.mem.Alignment.fromByteUnits(alignment);
@@ -147,7 +139,7 @@ fn stdFreeShim(
     zig_alloc.rawFree(slice, a, @returnAddress());
 }
 
-const system_max_alignment: usize = @alignOf(c.max_align_t);
+const system_base = std.heap.page_allocator;
 
 pub fn system() Allocator {
     return .{
@@ -158,21 +150,11 @@ pub fn system() Allocator {
     };
 }
 
-fn systemAlloc(ctx: ?*anyopaque, size: usize, alignment: usize) callconv(.C) ?*anyopaque {
+fn systemAlloc(ctx: ?*anyopaque, size: usize, alignment: usize) callconv(.c) ?*anyopaque {
     _ = ctx;
-
-    if (alignment <= system_max_alignment) {
-        return c.malloc(size);
-    }
-
-    const total = size + alignment + @sizeOf(usize);
-    const raw = c.malloc(total) orelse return null;
-    const raw_addr = @intFromPtr(raw);
-    const aligned_addr = std.mem.alignForward(usize, raw_addr + @sizeOf(usize), alignment);
-    const result: *anyopaque = @ptrFromInt(aligned_addr);
-    const slot: *usize = @ptrFromInt(aligned_addr - @sizeOf(usize));
-    slot.* = raw_addr;
-    return result;
+    const a = std.mem.Alignment.fromByteUnits(alignment);
+    const buf = system_base.rawAlloc(size, a, @returnAddress()) orelse return null;
+    return @ptrCast(buf);
 }
 
 fn systemRealloc(
@@ -181,23 +163,18 @@ fn systemRealloc(
     old_size: usize,
     new_size: usize,
     alignment: usize,
-) callconv(.C) ?*anyopaque {
+) callconv(.c) ?*anyopaque {
     _ = ctx;
+    const a = std.mem.Alignment.fromByteUnits(alignment);
 
-    if (alignment <= system_max_alignment) {
-        return c.realloc(ptr, new_size);
+    const new_buf = system_base.rawAlloc(new_size, a, @returnAddress()) orelse return null;
+    if (ptr) |p| {
+        const copy_size = @min(old_size, new_size);
+        @memcpy(new_buf[0..copy_size], @as([*]const u8, @ptrCast(p))[0..copy_size]);
+        const old_slice = @as([*]u8, @ptrCast(p))[0..old_size];
+        system_base.rawFree(old_slice, a, @returnAddress());
     }
-
-    if (ptr == null) return systemAlloc(null, new_size, alignment);
-
-    const new_ptr = systemAlloc(null, new_size, alignment) orelse return null;
-    const copy_size = @min(old_size, new_size);
-    @memcpy(
-        @as([*]u8, @ptrCast(new_ptr))[0..copy_size],
-        @as([*]const u8, @ptrCast(ptr.?))[0..copy_size],
-    );
-    systemFree(null, ptr, old_size, alignment);
-    return new_ptr;
+    return @ptrCast(new_buf);
 }
 
 fn systemFree(
@@ -205,19 +182,12 @@ fn systemFree(
     ptr: ?*anyopaque,
     size: usize,
     alignment: usize,
-) callconv(.C) void {
+) callconv(.c) void {
     _ = ctx;
-    _ = size;
-
     const p = ptr orelse return;
-
-    if (alignment <= system_max_alignment) {
-        c.free(p);
-        return;
-    }
-
-    const slot: *const usize = @ptrFromInt(@intFromPtr(p) - @sizeOf(usize));
-    c.free(@ptrFromInt(slot.*));
+    const a = std.mem.Alignment.fromByteUnits(alignment);
+    const slice = @as([*]u8, @ptrCast(p))[0..size];
+    system_base.rawFree(slice, a, @returnAddress());
 }
 
 // Tests.
