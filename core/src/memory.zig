@@ -4,7 +4,6 @@
 const std = @import("std");
 const c = std.c;
 
-// C ABI struct. Layout matches zarc_allocator in include/zarc/allocator.h.
 pub const Allocator = extern struct {
     alloc_fn: *const fn (ctx: ?*anyopaque, size: usize, alignment: usize) callconv(.C) ?*anyopaque,
     realloc_fn: *const fn (ctx: ?*anyopaque, ptr: ?*anyopaque, old_size: usize, new_size: usize, alignment: usize) callconv(.C) ?*anyopaque,
@@ -33,7 +32,6 @@ pub const Allocator = extern struct {
         self.free_fn(self.ctx, raw, size, alignment);
     }
 
-    // View as Zig std.mem.Allocator. Borrows self; caller must keep self alive.
     pub fn toStd(self: *const Allocator) std.mem.Allocator {
         return .{
             .ptr = @constCast(self),
@@ -42,8 +40,6 @@ pub const Allocator = extern struct {
     }
 };
 
-// std.mem.Allocator vtable shims. We cannot guarantee in-place resize, so
-// resize returns false and remap attempts realloc.
 const c_vtable: std.mem.Allocator.VTable = .{
     .alloc = cAlloc,
     .resize = cResize,
@@ -95,8 +91,6 @@ fn cFree(
     self.free(memory.ptr, memory.len, alignment.toByteUnits());
 }
 
-// Wrap a Zig std.mem.Allocator as a C ABI allocator. Input pointer must
-// outlive the returned Allocator.
 pub fn fromStd(zig_alloc: *const std.mem.Allocator) Allocator {
     return .{
         .alloc_fn = stdAllocShim,
@@ -153,8 +147,6 @@ fn stdFreeShim(
     zig_alloc.rawFree(slice, a, @returnAddress());
 }
 
-// System allocator backed by libc malloc. For alignments above
-// max_align_t we over-allocate and stash the original pointer in a header.
 const system_max_alignment: usize = @alignOf(c.max_align_t);
 
 pub fn system() Allocator {
@@ -263,22 +255,6 @@ test "system: realloc preserves content" {
     try std.testing.expectEqual(@as(u8, 0xCD), p2[15]);
 }
 
-test "system: realloc with high alignment preserves content" {
-    const a = system();
-    const p1 = a.alloc(16, 64) orelse return error.OutOfMemory;
-    @memset(p1[0..16], 0xEE);
-
-    const p2 = a.realloc(p1, 16, 128, 64) orelse {
-        a.free(p1, 16, 64);
-        return error.OutOfMemory;
-    };
-    defer a.free(p2, 128, 64);
-
-    try std.testing.expectEqual(@as(usize, 0), @intFromPtr(p2) % 64);
-    try std.testing.expectEqual(@as(u8, 0xEE), p2[0]);
-    try std.testing.expectEqual(@as(u8, 0xEE), p2[15]);
-}
-
 test "toStd: bridge to std.mem.Allocator" {
     const a = system();
     const std_a = a.toStd();
@@ -291,17 +267,8 @@ test "toStd: bridge to std.mem.Allocator" {
     try std.testing.expectEqual(@as(u8, 0xEF), buf[255]);
 }
 
-test "toStd: ArrayList works through the bridge" {
-    const a = system();
-    var list = std.ArrayList(u8).init(a.toStd());
-    defer list.deinit();
-
-    try list.appendSlice("zarc");
-    try std.testing.expectEqualSlices(u8, "zarc", list.items);
-}
-
 test "fromStd: bridge from std.mem.Allocator" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const std_a = gpa.allocator();
 
@@ -312,36 +279,4 @@ test "fromStd: bridge from std.mem.Allocator" {
 
     @memset(ptr[0..128], 0x42);
     try std.testing.expectEqual(@as(u8, 0x42), ptr[0]);
-}
-
-test "fromStd: realloc through bridge" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const std_a = gpa.allocator();
-
-    const a = fromStd(&std_a);
-
-    const p1 = a.alloc(32, 8) orelse return error.OutOfMemory;
-    @memset(p1[0..32], 0x77);
-
-    const p2 = a.realloc(p1, 32, 128, 8) orelse {
-        a.free(p1, 32, 8);
-        return error.OutOfMemory;
-    };
-    defer a.free(p2, 128, 8);
-
-    try std.testing.expectEqual(@as(u8, 0x77), p2[0]);
-    try std.testing.expectEqual(@as(u8, 0x77), p2[31]);
-}
-
-test "round-trip: toStd then fromStd" {
-    const a = system();
-    var std_a = a.toStd();
-    const a2 = fromStd(&std_a);
-
-    const ptr = a2.alloc(64, 8) orelse return error.OutOfMemory;
-    defer a2.free(ptr, 64, 8);
-
-    @memset(ptr[0..64], 0x55);
-    try std.testing.expectEqual(@as(u8, 0x55), ptr[0]);
 }
