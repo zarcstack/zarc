@@ -5,33 +5,43 @@ pub fn build(b: *std.Build) void {
     const optimize = b.standardOptimizeOption(.{});
 
     // core: libzarcutil
-    const core = b.addStaticLibrary(.{
-        .name = "zarcutil",
+    const core_module = b.createModule(.{
         .root_source_file = b.path("core/src/lib.zig"),
         .target = target,
         .optimize = optimize,
     });
-    core.linkLibC();
-    core.addIncludePath(b.path("include"));
+    core_module.link_libc = true;
+
+    const core = b.addLibrary(.{
+        .name = "zarcutil",
+        .root_module = core_module,
+        .linkage = .static,
+    });
     b.installArtifact(core);
 
     // expose core as a named module so cli can @import("zarcutil")
-    const core_module = b.addModule("zarcutil", .{
+    const zarcutil_module = b.createModule(.{
         .root_source_file = b.path("core/src/lib.zig"),
         .target = target,
         .optimize = optimize,
     });
+    zarcutil_module.link_libc = true;
 
-    const cli = b.addExecutable(.{
-        .name = "zarc",
+    // cli: zarc
+    const cli_module = b.createModule(.{
         .root_source_file = b.path("cli/src/main.zig"),
         .target = target,
         .optimize = optimize,
     });
-    cli.root_module.addImport("zarcutil", core_module);
+    cli_module.addImport("zarcutil", zarcutil_module);
+    cli_module.link_libc = true;
+    cli_module.addIncludePath(b.path("include"));
+
+    const cli = b.addExecutable(.{
+        .name = "zarc",
+        .root_module = cli_module,
+    });
     cli.linkLibrary(core);
-    cli.linkLibC();
-    cli.addIncludePath(b.path("include"));
     b.installArtifact(cli);
 
     // run
@@ -40,22 +50,13 @@ pub fn build(b: *std.Build) void {
     const run_step = b.step("run", "Run the zarc CLI");
     run_step.dependOn(&run_cmd.step);
 
-    // test: core + cli
+    // test
     const core_tests = b.addTest(.{
-        .root_source_file = b.path("core/src/lib.zig"),
-        .target = target,
-        .optimize = optimize,
+        .root_module = core_module,
     });
-    core_tests.linkLibC();
-    core_tests.addIncludePath(b.path("include"));
-
     const cli_tests = b.addTest(.{
-        .root_source_file = b.path("cli/src/main.zig"),
-        .target = target,
-        .optimize = optimize,
+        .root_module = cli_module,
     });
-    cli_tests.linkLibrary(core);
-    cli_tests.linkLibC();
 
     const run_core_tests = b.addRunArtifact(core_tests);
     const run_cli_tests = b.addRunArtifact(cli_tests);
